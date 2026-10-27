@@ -1,0 +1,32 @@
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Secrets and environment variables
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Generated data
+data/vector_store/
+data/processed/
+
+# Operating system and editor files
+.DS_Store
+.vscode/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+
+# Hospital source documents: keep local until approved for publication
+data/raw_data/
+
