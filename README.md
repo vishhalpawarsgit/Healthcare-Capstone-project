@@ -1,4 +1,6 @@
-# MediAssist AI — Enterprise Healthcare Agentic AI Copilot
+# Healthcare-Capstone-project
+
+## MediAssist AI — Enterprise Healthcare Agentic AI Copilot
 
 ## 1. Project Overview
 
