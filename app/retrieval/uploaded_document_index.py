@@ -1,4 +1,5 @@
 
+from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -6,10 +7,14 @@ from typing import Any
 import re
 import faiss
 import numpy as np
+from PIL import Image, UnidentifiedImageError
+import pytesseract
 
 from app.chunking.text_chunker import chunk_text
 from app.embeddings.embedding_model import EmbeddingModel
 from app.ingestion.document_loader import load_document
+
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB per file
 
 
 class UploadedDocumentIndex:
@@ -21,19 +26,55 @@ class UploadedDocumentIndex:
         self.records: list[dict[str, Any]] = []
 
     def add_uploaded_file(self, filename: str, content: bytes) -> int:
+        if len(content) > MAX_FILE_SIZE_BYTES:
+            raise ValueError(
+                f"{filename} exceeds the 50 MiB file-size limit."
+            )
+
         suffix = Path(filename).suffix.lower()
 
-        if suffix not in {".pdf", ".docx", ".txt"}:
-            raise ValueError("Only PDF, DOCX, and TXT files are supported.")
+        if suffix not in {".pdf", ".docx", ".txt", ".jpg", ".jpeg", ".png"}:
+            raise ValueError(
+                "Supported formats: PDF, DOCX, TXT, JPG, JPEG, and PNG."
+            )
 
         if not content:
             raise ValueError(f"{filename} is empty.")
 
-        # Use a temporary file because the existing loader accepts a file path.
-        with TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir) / Path(filename).name
-            temp_path.write_bytes(content)
-            document = load_document(temp_path)
+        if suffix in {".jpg", ".jpeg", ".png"}:
+            try:
+                with Image.open(BytesIO(content)) as image:
+                    image.load()
+
+                    if image.format not in {"JPEG", "PNG"}:
+                        raise ValueError(
+                            "Image content must be a valid JPEG or PNG file."
+                        )
+
+                    text = pytesseract.image_to_string(image).strip()
+
+            except (UnidentifiedImageError, OSError) as exc:
+                raise ValueError(
+                    f"Could not read image {filename}. "
+                    "Please upload a valid JPG, JPEG, or PNG image."
+                ) from exc
+
+            if not text:
+                raise ValueError(
+                    f"No text could be extracted from {filename}. "
+                    "Try an image with clearer, readable text."
+                )
+
+            document = {
+                "text": text,
+                "file_type": suffix.lstrip("."),
+            }
+
+        else:
+            with TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir) / Path(filename).name
+                temp_path.write_bytes(content)
+                document = load_document(temp_path)
 
         chunks = chunk_text(document["text"])
 
@@ -95,7 +136,10 @@ class UploadedDocumentIndex:
         stop_words = {
             "what", "are", "the", "is", "a", "an", "of", "for",
             "to", "in", "on", "and", "or", "does", "do", "how",
-            "patient", "patients",
+            "where", "when", "why", "who", "which", "according",
+            "must", "can", "could", "would", "should", "please",
+            "hospital", "patient", "patients", "image", "document",
+            "policy",
         }
 
         query_terms = {
@@ -122,7 +166,6 @@ class UploadedDocumentIndex:
                 if query_terms
                 else 0.0
             )
-
             # Blend semantic similarity and keyword overlap.
             combined_score = 0.75 * float(score) + 0.25 * overlap
 
@@ -131,6 +174,7 @@ class UploadedDocumentIndex:
                     "text": text,
                     "score": float(score),
                     "rerank_score": combined_score,
+                    "keyword_overlap": overlap,
                     "citation": record["metadata"],
                 }
             )
@@ -140,4 +184,17 @@ class UploadedDocumentIndex:
             reverse=True,
         )
 
-        return candidates[:top_k]
+        # Require stronger semantic similarity and keyword overlap.
+        MIN_SIMILARITY_SCORE = 0.40
+        MIN_KEYWORD_OVERLAP = 0.50
+
+        relevant_candidates = [
+            result
+            for result in candidates
+            if (
+                result["score"] >= MIN_SIMILARITY_SCORE
+                and result["keyword_overlap"] >= MIN_KEYWORD_OVERLAP
+            )
+        ]
+
+        return relevant_candidates[:top_k]

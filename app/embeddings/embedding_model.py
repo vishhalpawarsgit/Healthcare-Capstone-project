@@ -23,4 +23,4 @@ class EmbeddingModel:
 
     @property
     def dimensions(self) -> int:
-        return self.model.get_sentence_embedding_dimension()
+        return self.model.get_embedding_dimension()

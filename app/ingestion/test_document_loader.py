@@ -1,45 +1,84 @@
 
+import tempfile
+import unittest
 from pathlib import Path
 
-from document_loader import load_document
+from docx import Document
+
+from app.ingestion.document_loader import load_document
 
 
-project_root = Path(__file__).resolve().parents[2]
-data_folder = project_root / "data" / "raw_data"
+class TestDocumentLoader(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.folder = Path(self.temp_dir.name)
 
-pdf_files = sorted(data_folder.glob("*.pdf"))
+    def tearDown(self):
+        self.temp_dir.cleanup()
 
-if not pdf_files:
-    raise RuntimeError(f"No PDF files found in {data_folder}")
+    def test_load_txt(self):
+        path = self.folder / "sample.txt"
+        path.write_text(
+            "Fictional hospital admission procedure.",
+            encoding="utf-8",
+        )
 
-print(f"Found {len(pdf_files)} PDF files\n")
+        result = load_document(path)
 
-failed = []
+        self.assertEqual(result["file_type"], "txt")
+        self.assertIn("admission procedure", result["text"])
+        self.assertEqual(result["source"], "sample.txt")
 
-for pdf_path in pdf_files:
-    try:
-        result = load_document(pdf_path)
+    def test_load_docx(self):
+        path = self.folder / "sample.docx"
+        document = Document()
+        document.add_paragraph("Fictional patient safety procedure.")
+        document.save(path)
 
-        print(f"✅ File: {result['source']}")
-        print(f"   Pages: {result['metadata']['page_count']}")
-        print(f"   Extracted characters: {len(result['text'])}")
+        result = load_document(path)
 
-        if not result["text"].strip():
-            print("   ⚠️ No text extracted")
-            failed.append(pdf_path.name)
+        self.assertEqual(result["file_type"], "docx")
+        self.assertIn("patient safety", result["text"])
 
-    except Exception as exc:
-        print(f"❌ File: {pdf_path.name}")
-        print(f"   Error: {exc}")
-        failed.append(pdf_path.name)
+    def test_missing_file(self):
+        with self.assertRaises(FileNotFoundError):
+            load_document(self.folder / "missing.txt")
 
-print("\n-------------------------")
-print(f"Total PDFs: {len(pdf_files)}")
-print(f"Failed or empty: {len(failed)}")
+    def test_unsupported_extension(self):
+        path = self.folder / "sample.csv"
+        path.write_text("example", encoding="utf-8")
 
-if failed:
-    print("Files needing investigation:")
-    for name in failed:
-        print(f"- {name}")
-else:
-    print("✅ All PDF loader checks passed!")
+        with self.assertRaisesRegex(ValueError, "Unsupported file type"):
+            load_document(path)
+
+    def test_empty_file(self):
+        path = self.folder / "empty.txt"
+        path.write_bytes(b"")
+
+        with self.assertRaisesRegex(ValueError, "is empty"):
+            load_document(path)
+
+    def test_whitespace_only_file(self):
+        path = self.folder / "blank.txt"
+        path.write_text("   \n  ", encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "No extractable text"):
+            load_document(path)
+
+    def test_corrupt_docx(self):
+        path = self.folder / "corrupt.docx"
+        path.write_bytes(b"not a valid Word document")
+
+        with self.assertRaisesRegex(ValueError, "Could not read"):
+            load_document(path)
+
+    def test_corrupt_pdf(self):
+        path = self.folder / "corrupt.pdf"
+        path.write_bytes(b"not a valid PDF")
+
+        with self.assertRaisesRegex(ValueError, "Could not read"):
+            load_document(path)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

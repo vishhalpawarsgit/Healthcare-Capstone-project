@@ -1,8 +1,17 @@
 
+import sys
+from pathlib import Path
+
 import streamlit as st
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.retrieval.rag_engine import RAGEngine
 from app.retrieval.uploaded_document_index import UploadedDocumentIndex
+
+MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024  # 50 MiB per file
 
 
 # --------------------------------------------------
@@ -54,10 +63,13 @@ with st.sidebar:
     st.header("📎 Document Upload")
 
     uploaded_files = st.file_uploader(
-        "Select healthcare documents",
-        type=["pdf", "docx", "txt"],
+        "Select healthcare documents and images",
+        type=["pdf", "docx", "txt", "jpg", "jpeg", "png"],
         accept_multiple_files=True,
-        help="Supported formats: PDF, DOCX, TXT.",
+        help=(
+            "Supported formats: PDF, DOCX, TXT, JPG, JPEG, PNG. "
+            "Maximum size: 50 MiB per file."
+        ),
     )
 
     if st.button(
@@ -69,10 +81,22 @@ with st.sidebar:
         successful_files = 0
 
         for position, uploaded_file in enumerate(uploaded_files):
-            file_key = (
-                uploaded_file.name,
-                len(uploaded_file.getvalue()),
-            )
+            file_size = uploaded_file.size
+
+            if file_size > MAX_FILE_SIZE_BYTES:
+                st.error(
+                    f"{uploaded_file.name} exceeds the 50 MiB file-size limit. "
+                    "Please upload a smaller file."
+                )
+                progress.progress((position + 1) / len(uploaded_files))
+                continue
+
+            if file_size == 0:
+                st.error(f"{uploaded_file.name} is empty.")
+                progress.progress((position + 1) / len(uploaded_files))
+                continue
+
+            file_key = (uploaded_file.name, file_size)
 
             if file_key in st.session_state.processed_uploads:
                 st.caption(f"Already processed: {uploaded_file.name}")
@@ -127,10 +151,10 @@ with st.sidebar:
     )
 
 
-# --------------------------------------------------
-# Display chat history
-# --------------------------------------------------
-for message in st.session_state.messages:
+# Display only the latest five chat messages (FIFO)
+visible_messages = st.session_state.messages[-5:]
+
+for message in visible_messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
 
@@ -219,9 +243,25 @@ if question:
                         st.markdown(format_citations(citations))
 
                 if answer_source == "uploaded_documents":
-                    st.caption("Answer source: uploaded documents")
+                    source_types = {
+                        record["metadata"]["source"]: record["metadata"]["file_type"]
+                        for record in st.session_state.uploaded_index.records
+                    }
+
+                    cited_file_types = {
+                        source_types.get(citation.get("source"))
+                        for citation in citations
+                    }
+
+                    if cited_file_types and cited_file_types.issubset(
+                        {"jpg", "jpeg", "png"}
+                    ):
+                        st.caption("Answer source: multimodal images (OCR-extracted text)")
+                    else:
+                        st.caption("Answer source: uploaded documents")
+
                 else:
-                    st.caption("Answer source: existing Phase 10 RAG index")
+                    st.caption("Answer source: external-data RAG (Phase 10 index)")
 
                 history_content = answer
 

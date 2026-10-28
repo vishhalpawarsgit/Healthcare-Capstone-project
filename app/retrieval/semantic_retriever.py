@@ -45,6 +45,14 @@ class SemanticRetriever:
             top_k=self.top_k,
         )
 
+        # Reject weak semantic matches instead of returning unrelated text.
+        MIN_SIMILARITY_SCORE = 0.40
+        results = [
+            result
+            for result in results
+            if result["score"] >= MIN_SIMILARITY_SCORE
+        ]
+
         retrieved = []
 
         for rank, result in enumerate(results, start=1):
